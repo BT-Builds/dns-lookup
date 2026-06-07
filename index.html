@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DNS Lookup API | BT Builds</title>
+<meta name="description" content="Query DNS records for any domain without installing CLI tools">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,Segoe UI,Helvetica,sans-serif;line-height:1.6}
+  .container{max-width:900px;margin:0 auto;padding:60px 24px}
+  h1{font-size:42px;color:#fff;margin-bottom:12px}
+  .tagline{font-size:18px;color:#8b949e;margin-bottom:32px}
+  .badges{margin-bottom:32px}
+  .badge{display:inline-block;background:#161b22;border:1px solid #30363d;padding:4px 12px;border-radius:20px;font-size:13px;margin-right:8px;color:#58a6ff}
+  h2{font-size:24px;color:#fff;margin:40px 0 16px;border-bottom:1px solid #21262d;padding-bottom:8px}
+  pre{background:#161b22;border:1px solid #30363d;color:#c9d1d9;padding:16px;border-radius:8px;overflow-x:auto;font-family:monospace;font-size:13px}
+  code{font-family:monospace}
+  .pricing{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin:20px 0}
+  .tier{background:#161b22;border:1px solid #30363d;padding:20px;border-radius:8px}
+  .tier h3{color:#58a6ff;font-size:16px;margin-bottom:8px;text-transform:uppercase}
+  .tier .price{font-size:28px;font-weight:600;color:#fff;margin:8px 0}
+  .tier ul{list-style:none;font-size:14px;color:#8b949e}
+  .tier li{margin:6px 0}
+  .tier.featured{border-color:#58a6ff}
+  .btn{display:inline-block;background:#238636;color:#fff;padding:10px 24px;border-radius:6px;text-decoration:none;font-weight:600;margin-top:12px}
+  .btn:hover{background:#2ea043}
+  .btn-secondary{background:#21262d;border:1px solid #30363d}
+  .btn-secondary:hover{background:#30363d}
+  a{color:#58a6ff}
+  /* Try-it widget */
+  .bt-tryit{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:24px;margin:24px 0}
+  .bt-tryit textarea,.bt-tryit input{width:100%;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:10px;border-radius:6px;font-family:monospace;font-size:13px;box-sizing:border-box;margin-bottom:12px}
+  .bt-tryit label{color:#8b949e;font-size:12px;display:block;margin-bottom:4px}
+  .bt-tryit pre{max-height:300px;overflow:auto;margin-top:12px;white-space:pre-wrap;word-break:break-all}
+  footer{margin-top:60px;padding-top:24px;border-top:1px solid #21262d;color:#8b949e;font-size:13px;text-align:center}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>DNS Lookup API</h1>
+  <p class="tagline">Query DNS records for any domain without installing CLI tools</p>
+  <div class="badges">
+    <span class="badge">REST API</span>
+    <span class="badge">JSON</span>
+    <span class="badge">Free Tier</span>
+    <span class="badge">Vercel-Hosted</span>
+  </div>
+
+  <h2>Try It Now</h2>
+  <div class="bt-tryit">
+    <label>Endpoint</label>
+    <input id="bt-endpoint" type="text" value="https://dns-lookup-beta.vercel.app/api/v1/lookup" readonly>
+    <label>Request body (JSON)</label>
+    <textarea id="bt-body" rows="4">{}</textarea>
+    <button class="btn" onclick="btTryIt()">Send Request</button>
+    <pre id="bt-response" style="display:none"></pre>
+  </div>
+
+  <h2>Quick Start</h2>
+  <pre><code>curl -X POST https://dns-lookup-beta.vercel.app/api/v1/lookup \
+  -H "X-API-Key: free-demo-key" \
+  -H "Content-Type: application/json" \
+  -d '{}'</code></pre>
+
+  <h2>Pricing</h2>
+  <div class="pricing">
+    <div class="tier"><h3>Free</h3><div class="price">$0</div><ul><li>1,000 req/mo</li><li>2 req/sec</li><li>No card required</li></ul><a href="https://btbuilds.lemonsqueezy.com/checkout/buy/1742441" class="btn btn-secondary">Start free</a></div>
+    <div class="tier featured"><h3>Starter</h3><div class="price">$2.99<small>/mo</small></div><ul><li>25,000 req/mo</li><li>30 req/sec</li><li>Email support</li></ul><a href="https://btbuilds.lemonsqueezy.com/checkout/buy/1742443" class="btn">Subscribe</a></div>
+    <div class="tier"><h3>Pro</h3><div class="price">$7.99<small>/mo</small></div><ul><li>200,000 req/mo</li><li>120 req/sec</li><li>Priority support</li></ul><a href="https://btbuilds.lemonsqueezy.com/checkout/buy/1742445" class="btn btn-secondary">Subscribe</a></div>
+  </div>
+
+  <h2>Documentation</h2>
+  <p><a href="https://dns-lookup-beta.vercel.app/docs">Swagger UI →</a> &nbsp;|&nbsp;
+  <a href="https://dns-lookup-beta.vercel.app/openapi.json">OpenAPI Spec →</a> &nbsp;|&nbsp;
+  <a href="https://github.com/BT-Builds/dns-lookup">GitHub →</a> &nbsp;|&nbsp;
+  <a href="https://run.pstmn.io/button.svg">Postman →</a></p>
+
+  <footer>Built by <a href="https://btbuilds.lemonsqueezy.com">BT Builds</a> · <a href="https://status-page-zeta.vercel.app">Status</a></footer>
+</div>
+<script>
+async function btTryIt() {
+  const out = document.getElementById('bt-response');
+  out.style.display = 'block';
+  out.textContent = 'Loading...';
+  try {
+    const url = document.getElementById('bt-endpoint').value;
+    const body = document.getElementById('bt-body').value.trim();
+    const opts = { method: body ? 'POST' : 'GET',
+                   headers: {'X-API-Key':'free-demo-key', 'Content-Type':'application/json'}};
+    if (body) opts.body = body;
+    const r = await fetch(url, opts);
+    const j = await r.json();
+    out.textContent = `Status: ${r.status}\n\n` + JSON.stringify(j, null, 2);
+  } catch (e) { out.textContent = 'Error: ' + e.message; }
+}
+</script>
+</body>
+</html>
