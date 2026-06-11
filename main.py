@@ -1,172 +1,141 @@
 import os
 import time
-import socket
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import dns.resolver
+from collections import defaultdict
+from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
-import uvicorn
-try:
-    from mangum import Mangum
-    mangum_available = True
-except ImportError:
-    mangum_available = False
+from typing import List, Optional
 
-app = FastAPI(title="DNS Lookup API", version="1.0.0")
+# ── API Key Auth (Upstash Redis) ───────────────────────────────────────────────
+import os, time, json as _json
+from urllib.request import Request as _Req, urlopen as _urlopen
 
-# === BT Builds Standard Middleware ===
-from fastapi.middleware.cors import CORSMiddleware as _BTCors
-app.add_middleware(_BTCors, allow_origins=["*"], allow_methods=["*"],
-    allow_headers=["*"], expose_headers=["X-RateLimit-Limit","X-RateLimit-Remaining","X-RateLimit-Reset"])
+_UPSTASH_URL   = os.environ.get('UPSTASH_REDIS_REST_URL', '')
+_UPSTASH_TOKEN=os.env...EN', '')
+_TIERS = {'free': 1000, 'starter': 25000, 'pro': 200000, 'demo': 50}
 
-@app.middleware("http")
-async def _bt_add_headers(request, call_next):
-    response = await call_next(request)
-    response.headers["X-Powered-By"] = "btbuilds"
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    return response
+def _redis(cmd):
+    url = f'{_UPSTASH_URL}/{cmd[0]}/' + '/'.join(str(x) for x in cmd[1:])
+    req = _Req(url, headers={'Authorization': f'Bearer {_UPSTASH_TOKEN}'})
+    try:
+        return _json.loads(_urlopen(req, timeout=3).read()).get('result')
+    except: return None
 
-if mangum_available:
-    handler = Mangum(app)
+def verify_api_key(x_api_key: str = Header(default='free-demo-key')):
+    if not _UPSTASH_URL:  # no Upstash configured, allow all (dev mode)
+        return {'key': x_api_key, 'tier': 'free'}
+    tier = 'demo'
+    if x_api_key != 'free-demo-key':
+        raw = _redis(['GET', f'key:{x_api_key}'])
+        if not raw:
+            raise HTTPException(401, 'Invalid API key. Get one at btbuilds.lemonsqueezy.com')
+        data = _json.loads(raw)
+        if not data.get('active', True):
+            raise HTTPException(401, 'API key revoked')
+        tier = data.get('tier', 'free')
+    month = time.strftime('%Y-%m')
+    used = int(_redis(['INCR', f'usage:{x_api_key}:{month}']) or 1)
+    if used == 1: _redis(['EXPIRE', f'usage:{x_api_key}:{month}', 2678400])
+    limit = _TIERS.get(tier, 1000)
+    if used > limit:
+        raise HTTPException(429, f'Monthly limit reached ({limit:,}/mo). Upgrade at btbuilds.lemonsqueezy.com')
+    return {'key': x_api_key, 'tier': tier, 'used': used}
 
-rate_limit_storage = {}
-API_KEY = os.environ.get("API_KEY", "dev-key-change-me")
 
-security = HTTPBearer(auto_error=False)
+app = FastAPI(
+    title="DNS Lookup API",
+    description="Query DNS records for any domain without installing CLI tools",
+    version="1.0.0"
+)
 
-def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if not credentials or credentials.credentials != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
-    return True
+API_KEYS=*** os.environ.get("API_KEYS", "free-demo-key").split(",")))
+RATE_LIMIT = int(os.environ.get("RATE_LIMIT_PER_MIN", "60"))
+_req_counts: dict = defaultdict(list)
 
-def check_rate_limit(client_id: str = "default"):
-    current_hour = int(time.time() / 3600)
-    key = f"{client_id}:{current_hour}"
-    if key not in rate_limit_storage:
-        rate_limit_storage[key] = 0
-    if rate_limit_storage[key] >= 100:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    rate_limit_storage[key] += 1
-    return True
 
-class RecordResult(BaseModel):
+def auth(x_api_key: str = Header(default="free-demo-key")):
+    if x_api_key not in API_KEYS:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    now = time.time()
+    window = [t for t in _req_counts[x_api_key] if now - t < 60]
+    window.append(now)
+    _req_counts[x_api_key] = window
+    if len(window) > RATE_LIMIT:
+        raise HTTPException(status_code=429, detail=f"Rate limit: {RATE_LIMIT} req/min")
+
+
+class DNSRecord(BaseModel):
     type: str
     value: str
 
-class LookupResponse(BaseModel):
+
+class DNSResponse(BaseModel):
     domain: str
-    records: list
-    error: str = None
+    records: List[DNSRecord]
+    error: Optional[str] = None
+
 
 class BulkRequest(BaseModel):
     items: list
+
 
 class BulkResponse(BaseModel):
     results: list
     total: int
     successful: int
 
+
 def lookup_dns_sync(domain: str, record_types: list = None) -> dict:
+    """Core DNS lookup logic reused by both single and bulk endpoints"""
     if record_types is None:
         record_types = ["A", "AAAA", "MX", "TXT", "NS", "CNAME"]
 
-    results = {"domain": domain, "records": [], "error": None}
-
-    try:
-        for rtype in record_types:
-            try:
-                if rtype == "A":
-                    answers = socket.getaddrinfo(domain, None, family=socket.AF_INET)
-                    seen = set()
-                    for family, type_, proto, canonname, sockaddr in answers:
-                        ip = sockaddr[0]
-                        if ip not in seen:
-                            results["records"].append({"type": "A", "value": ip})
-                            seen.add(ip)
-                elif rtype == "AAAA":
-                    answers = socket.getaddrinfo(domain, None, family=socket.AF_INET6)
-                    seen = set()
-                    for family, type_, proto, canonname, sockaddr in answers:
-                        ip = sockaddr[0]
-                        if ip not in seen:
-                            results["records"].append({"type": "AAAA", "value": ip})
-                            seen.add(ip)
-            except socket.gaierror:
-                pass
-            except socket.error:
-                pass
-    except Exception as e:
-        results["error"] = str(e)
-
-    return results
-
-def lookup_dns(domain: str, record_types: list = None) -> dict:
-    """Async-capable DNS lookup using aiodns if available, falls back to sync socket"""
-    try:
-        import asyncio
-        import aiodns
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    records = []
+    for rtype in record_types:
         try:
-            return loop.run_until_complete(async_lookup_dns(domain, record_types))
-        finally:
-            loop.close()
-    except ImportError:
-        return lookup_dns_sync(domain, record_types)
+            if rtype == "MX":
+                answers = dns.resolver.resolve(domain, rtype, lifetime=5)
+                for rdata in answers:
+                    records.append(DNSRecord(type=rtype, value=f"{rdata.exchange} (priority: {rdata.preference})"))
+            elif rtype == "CNAME":
+                answers = dns.resolver.resolve(domain, rtype, lifetime=5)
+                for rdata in answers:
+                    records.append(DNSRecord(type=rtype, value=str(rdata.target)))
+            else:
+                answers = dns.resolver.resolve(domain, rtype, lifetime=5)
+                for rdata in answers:
+                    records.append(DNSRecord(type=rtype, value=str(rdata)))
+        except dns.resolver.NXDOMAIN:
+            pass
+        except dns.resolver.NoAnswer:
+            pass
+        except dns.resolver.NoNameservers:
+            pass
+        except dns.exception.Timeout:
+            pass
+        except Exception:
+            pass
 
-async def async_lookup_dns(domain: str, record_types: list = None) -> dict:
-    if record_types is None:
-        record_types = ["A", "AAAA", "MX", "TXT", "NS", "CNAME"]
+    return DNSResponse(domain=domain, records=records)
 
-    results = {"domain": domain, "records": [], "error": None}
-
-    try:
-        import aiodns
-        resolver = aiodns.DNSResolver()
-        for rtype in record_types:
-            try:
-                if rtype == "A":
-                    resp = await resolver.query(domain, "A")
-                    for rdata in resp:
-                        results["records"].append({"type": "A", "value": rdata.host})
-                elif rtype == "AAAA":
-                    resp = await resolver.query(domain, "AAAA")
-                    for rdata in resp:
-                        results["records"].append({"type": "AAAA", "value": rdata.host})
-                elif rtype == "MX":\                    resp = await resolver.query(domain, "MX")
-                    for rdata in resp:
-                        results["records"].append({"type": "MX", "value": f"{rdata.host}. (priority: {rdata.priority})"})
-                elif rtype == "TXT":
-                    resp = await resolver.query(domain, "TXT")
-                    for rdata in resp:
-                        txt = "".join(rdata.strings) if hasattr(rdata, 'strings') else str(rdata)
-                        results["records"].append({"type": "TXT", "value": txt})
-                elif rtype == "NS":
-                    resp = await resolver.query(domain, "NS")
-                    for rdata in resp:
-                        results["records"].append({"type": "NS", "value": str(rdata.host)})
-                elif rtype == "CNAME":
-                    resp = await resolver.query(domain, "CNAME")
-                    for rdata in resp:
-                        results["records"].append({"type": "CNAME", "value": str(rdata.host)})
-            except Exception:
-                pass
-    except ImportError:
-        # Fallback to sync socket-based lookup
-        results = lookup_dns_sync(domain, record_types)
-
-    return results
 
 @app.get("/health")
-async def health():
-    return {"status": "ok"}
+def health():
+    return {"status": "ok", "service": "dns-lookup"}
 
-@app.post("/api/v1/lookup", response_model=LookupResponse)
-async def lookup_dns_endpoint(domain: str, record_types: list = None, _: bool = Depends(check_rate_limit)):
-    result = await async_lookup_dns(domain, record_types)
-    return result
 
-@app.post("/bulk/lookup", response_model=BulkResponse)
-async def bulk_lookup(request: BulkRequest, _: bool = Depends(check_rate_limit)):
+@app.post("/api/v1/lookup", dependencies=[Depends(auth)])
+def lookup_dns(
+    domain: str,
+    record_types: Optional[List[str]] = ["A", "AAAA", "MX", "TXT", "NS", "CNAME"]
+):
+    if not domain:
+        raise HTTPException(status_code=400, detail="Domain parameter required")
+    return lookup_dns_sync(domain, record_types)
+
+
+@app.post("/bulk/lookup", dependencies=[Depends(auth)])
+def bulk_lookup(request: BulkRequest):
     items = request.items
     if not isinstance(items, list):
         raise HTTPException(status_code=400, detail="items must be a list")
@@ -188,8 +157,11 @@ async def bulk_lookup(request: BulkRequest, _: bool = Depends(check_rate_limit))
             if not domain:
                 raise ValueError("domain is required")
 
-            result = await async_lookup_dns(domain, record_types)
-            results.append({"input": domain, "output": result, "error": None})
+            output = lookup_dns_sync(domain, record_types)
+            output_dict = {"domain": output.domain, "records": [{"type": r.type, "value": r.value} for r in output.records]}
+            if output.error:
+                output_dict["error"] = output.error
+            results.append({"input": domain, "output": output_dict, "error": None})
             successful += 1
         except Exception as e:
             domain = item.get("domain", str(item)) if isinstance(item, dict) else str(item)
@@ -197,5 +169,13 @@ async def bulk_lookup(request: BulkRequest, _: bool = Depends(check_rate_limit))
 
     return {"results": results, "total": len(items), "successful": successful}
 
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=5051)
+
+try:
+    from mangum import Mangum
+    handler = Mangum(app, lifespan="off")
+except ImportError:
+    pass
