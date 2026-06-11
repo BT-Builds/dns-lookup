@@ -10,8 +10,8 @@ from typing import List, Optional
 import os, time, json as _json
 from urllib.request import Request as _Req, urlopen as _urlopen
 
-_UPSTASH_URL   = os.environ.get('UPSTASH_REDIS_REST_URL', '')
-_UPSTASH_TOKEN=os.env...EN', '')
+_UPSTASH_URL = os.environ.get('UPSTASH_REDIS_REST_URL', '')
+_UPSTASH_TOKEN=os.environ.get('UPSTASH_REDIS_REST_TOKEN', '')
 _TIERS = {'free': 1000, 'starter': 25000, 'pro': 200000, 'demo': 50}
 
 def _redis(cmd):
@@ -48,7 +48,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-API_KEYS=*** os.environ.get("API_KEYS", "free-demo-key").split(",")))
+API_KEYS = set(filter(None, os.environ.get("API_KEYS", "free-demo-key").split(",")))
 RATE_LIMIT = int(os.environ.get("RATE_LIMIT_PER_MIN", "60"))
 _req_counts: dict = defaultdict(list)
 
